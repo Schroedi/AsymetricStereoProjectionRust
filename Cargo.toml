@@ -1,0 +1,11 @@
+[package]
+name = "rust_glium_test"
+version = "0.1.0"
+authors = ["Christoph Schröder <cs@keksdev.de>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+glium = "0.28.0"
+open_track = { path = "open_track"}
