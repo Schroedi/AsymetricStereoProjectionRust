@@ -1,3 +1,5 @@
+use imgui_glium_renderer::glium::implement_vertex;
+
 #[derive(Copy, Clone)]
 pub struct Vertex {
     position: (f32, f32, f32)

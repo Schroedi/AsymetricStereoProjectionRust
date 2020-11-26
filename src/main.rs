@@ -1,18 +1,18 @@
 #![feature(array_map)]
 
-#[macro_use]
-extern crate glium;
-
-use glium::Rect;
-
 use cgmath::prelude::*;
-use cgmath::{Matrix4, Matrix3};
 use cgmath::Vector3;
-use imgui_glium_renderer::imgui::{Context, Ui, FontSource, FontConfig};
-use imgui_glium_renderer::imgui::im_str;
+use cgmath::{Matrix3, Matrix4};
 use std::time::Instant;
-use glium::glutin::event::Event;
+
+use glium::index::PrimitiveType;
+use glium::{uniform, Display, Frame, IndexBuffer, Program, Rect, Surface, VertexBuffer};
+use glutin::window::WindowBuilder;
+use imgui_glium_renderer::imgui::{im_str, Context, FontConfig, FontSource, Ui};
 use imgui_glium_renderer::Renderer;
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
+use winit::event::{Event, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
 
 #[path = "teapot.rs"]
 mod teapot;
@@ -20,12 +20,15 @@ mod teapot;
 extern crate open_track;
 
 enum Eyes {
-    LEFT, RIGHT, CYCLOPS
+    LEFT,
+    RIGHT,
+    CYCLOPS,
 }
 
 #[allow(dead_code)]
 enum StereoModes {
-    ANAGLYPH, SBS
+    ANAGLYPH,
+    SBS,
 }
 
 struct DisplayCorners {
@@ -34,55 +37,106 @@ struct DisplayCorners {
     pc: Vector3<f32>,
 }
 
+struct Model {
+    positions: VertexBuffer<teapot::Vertex>,
+    normals: VertexBuffer<teapot::Normal>,
+    indices: IndexBuffer<u16>,
+    model_mat: [[f32; 4]; 4],
+}
+
+struct World {
+    display_corners: DisplayCorners,
+    models: Vec<Model>,
+}
+
 const STEREO_MODE: StereoModes = StereoModes::SBS;
 
 fn main() {
-    #![allow(unused_imports)]
-    use glium::{glutin, Surface};
-
-    let display_corners = DisplayCorners {
-        pa: Vector3 {x: -0.41, y: -0.45, z: 0.0},
-        pb: Vector3 {x:  0.41, y: -0.45, z: 0.0},
-        pc: Vector3 {x: -0.41, y:  0.00, z: 0.0}, };
-
-    let event_loop = glutin::event_loop::EventLoop::new();
-    let wb = glutin::window::WindowBuilder::new()
-        .with_title("Projection")
-        .with_inner_size(glutin::dpi::LogicalSize::new(1920_f64, 1024_f64));
-    let cb = glutin::ContextBuilder::new().with_depth_buffer(24);
-    let display = glium::Display::new(wb, cb, &event_loop).unwrap();
+    let title = "Title";
+    let event_loop = EventLoop::new();
+    let context = glutin::ContextBuilder::new().with_vsync(true);
+    let builder = WindowBuilder::new()
+        .with_title(title.to_owned())
+        .with_inner_size(glutin::dpi::LogicalSize::new(1920_f64, 1080_f64));
+    let display =
+        Display::new(builder, context, &event_loop).expect("Failed to initialize display");
 
     let mut imgui = Context::create();
     imgui.set_ini_filename(None);
-    imgui.io_mut().display_size = [1920_f32, 1024_f32];
-    let mut renderer = Renderer::init(&mut imgui, &display).expect("Failed to initialize renderer");
-    let hidpi_factor = 2.0;
-    let font_size = (13.0 * hidpi_factor) as f32;
-    imgui.fonts().add_font(&[
-        FontSource::DefaultFontData {
-            config: Some(FontConfig {
-                size_pixels: font_size,
-                ..FontConfig::default()
-            }),
-        },
-        // FontSource::TtfData {
-        //     data: include_bytes!("../../../resources/mplus-1p-regular.ttf"),
-        //     size_pixels: font_size,
-        //     config: Some(FontConfig {
-        //         rasterizer_multiply: 1.75,
-        //         glyph_ranges: FontGlyphRanges::japanese(),
-        //         ..FontConfig::default()
-        //     }),
-        // },
-    ]);
 
+    let mut platform = WinitPlatform::init(&mut imgui);
+    {
+        let gl_window = display.gl_window();
+        let window = gl_window.window();
+        platform.attach_window(imgui.io_mut(), window, HiDpiMode::Rounded);
+    }
+
+    let hidpi_factor = platform.hidpi_factor();
+    let font_size = (13.0 * hidpi_factor) as f32;
+    imgui.fonts().add_font(&[FontSource::DefaultFontData {
+        config: Some(FontConfig {
+            size_pixels: font_size,
+            ..FontConfig::default()
+        }),
+    }]);
     imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
 
-    let positions = glium::VertexBuffer::new(&display, &teapot::VERTICES).unwrap();
-    let normals = glium::VertexBuffer::new(&display, &teapot::NORMALS).unwrap();
-    let indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList,
-                                          &teapot::INDICES).unwrap();
+    let mut renderer = Renderer::init(&mut imgui, &display).expect("Failed to initialize renderer");
 
+
+    // our stuff
+    let world = build_world(&display);
+    let shader = build_shader(&display);
+    //let tracker = open_track::OpenTrackServer::start(None);
+
+    let mut last_frame = Instant::now();
+    event_loop.run(move |event, _, control_flow| match event {
+        Event::NewEvents(_) => {
+            let now = Instant::now();
+            imgui.io_mut().update_delta_time(now - last_frame);
+            last_frame = now;
+        }
+        Event::MainEventsCleared => {
+            let gl_window = display.gl_window();
+            platform
+                .prepare_frame(imgui.io_mut(), gl_window.window())
+                .expect("Failed to prepare frame");
+            gl_window.window().request_redraw();
+        }
+        Event::RedrawRequested(_) => {
+            let mut ui = imgui.frame();
+
+            let mut run = true;
+            run_ui(&mut run, &mut ui);
+            if !run {
+                *control_flow = ControlFlow::Exit;
+            }
+
+            let gl_window = display.gl_window();
+            let mut target = display.draw();
+            target.clear_color_and_depth((0.1, 0.1, 0.11, 1.0), 1.0);
+
+            render3D(&mut target, &world, &shader);
+
+            platform.prepare_render(&ui, gl_window.window());
+            let draw_data = ui.render();
+            renderer
+                .render(&mut target, draw_data)
+                .expect("Rendering failed");
+            target.finish().expect("Failed to swap buffers");
+        }
+        Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } => *control_flow = ControlFlow::Exit,
+        event => {
+            let gl_window = display.gl_window();
+            platform.handle_event(imgui.io_mut(), gl_window.window(), &event);
+        }
+    })
+}
+
+fn build_shader(display: &Display) -> Program {
     let vertex_shader_src = r#"
         #version 150
         in vec3 position;
@@ -118,138 +172,128 @@ fn main() {
         }
     "#;
 
-    let program = glium::Program::from_source(&display, vertex_shader_src, fragment_shader_src,
-                                              None).unwrap();
+    Program::from_source(display, vertex_shader_src, fragment_shader_src, None).unwrap()
+}
 
-    //let tracker = open_track::OpenTrackServer::start(None);
-
-    let mut last_frame = Instant::now();
-
-    event_loop.run(move |event, _, control_flow| {
-        let next_frame_time = std::time::Instant::now() +
-            std::time::Duration::from_nanos(16_666_667);
-        *control_flow = glutin::event_loop::ControlFlow::WaitUntil(next_frame_time);
-
-        match event {
-            Event::WindowEvent { event, .. } => match event {
-                glutin::event::WindowEvent::CloseRequested => {
-                    *control_flow = glutin::event_loop::ControlFlow::Exit;
-                    return;
-                },
-                _ => return,
-            },
-            Event::NewEvents(cause) => match cause {
-                glutin::event::StartCause::ResumeTimeReached { .. } => (),
-                glutin::event::StartCause::Init => (),
-                _ => return,
-            },
-            _ => return,
-        }
-
-        let now = Instant::now();
-        imgui.io_mut().update_delta_time(now - last_frame);
-        last_frame = now;
-        imgui.pre
-
-        let mut ui = imgui.frame();
-
-        let mut run = true;
-        run_ui(&mut run, &mut ui);
-        if !run {
-            *control_flow = glutin::event_loop::ControlFlow::Exit;
-        }
-
-        let mut target = display.draw();
-        target.clear_color_and_depth((0.1, 0.1, 0.11, 1.0), 1.0);
-
-        let model = [
+fn build_world(display: &Display) -> World {
+    let model_teapot = Model {
+        model_mat: [
             [0.1, 0.0, 0.0, 0.0],
             [0.0, 0.1, 0.0, 0.0],
             [0.0, 0.0, 0.1, 0.0],
-            [0.0, 0.0, 0.0, 1.0f32]
-        ];
+            [0.0, 0.0, 0.0, 1.0f32],
+        ],
+        positions: VertexBuffer::new(display, &teapot::VERTICES).unwrap(),
+        normals: VertexBuffer::new(display, &teapot::NORMALS).unwrap(),
+        indices: IndexBuffer::new(display, PrimitiveType::TrianglesList, &teapot::INDICES).unwrap(),
+    };
 
-        let eyes = [Eyes::LEFT, Eyes::RIGHT];
-        // for eye in eyes.iter() {
-        //
-        //     let eye_offset = match eye {
-        //         Eyes::LEFT => -0.06,
-        //         Eyes::RIGHT => 0.06,
-        //         _ => {0.0}
-        //     };
-        //     //let pos = [0.0 + eye_offset, 0.0, 60.0];
-        //     let (pos, _rot) = tracker.get_pos_rot();
-        //
-        //     let view = view_matrix(&pos, &[0.0, 0.0, -1.0], &[0.0, 1.0, 0.0]);
-        //     let (window_width, window_height) = target.get_dimensions();
-        //     let perspective = perspective_projection(window_width, window_height);
-        //
-        //     //let perspective = general_projection(&display_corners, &pos, 0.01, 1000.0);
-        //
-        //     let light = [1.4, 0.4, -0.7f32];
-        //
-        //     let params = glium::DrawParameters {
-        //         color_mask:
-        //         match STEREO_MODE {
-        //             StereoModes::ANAGLYPH =>
-        //                 match eye {
-        //                 Eyes::LEFT => (true, false, false, true),
-        //                 Eyes::RIGHT => (false, true, true, true),
-        //                 Eyes::CYCLOPS => (true, true, true, true),
-        //                 },
-        //             _ =>
-        //                 (true, true, true, true)
-        //         },
-        //         viewport:
-        //         match STEREO_MODE {
-        //             StereoModes::ANAGLYPH => None,
-        //             StereoModes::SBS => match eye {
-        //                 Eyes::LEFT => Some(Rect{left: 0, bottom:0, width: window_width /2, height:768}),
-        //                 Eyes::RIGHT => Some(Rect{left: window_width /2, bottom:0, width: window_width /2, height:768}),
-        //                 Eyes::CYCLOPS => None,
-        //             },
-        //         },
-        //         depth: glium::Depth {
-        //             test: glium::draw_parameters::DepthTest::IfLess,
-        //             write: true,
-        //             .. Default::default()
-        //         },
-        //         //backface_culling: glium::draw_parameters::BackfaceCullingMode::CullClockWise,
-        //         .. Default::default()
-        //     };
-        //
-        //     target.draw((&positions, &normals), &indices, &program,
-        //                 &uniform! { model: model, view: view, perspective: perspective, u_light: light },
-        //                 &params).unwrap();
-        // } // eye
+    World {
+        display_corners: DisplayCorners {
+            pa: Vector3 {
+                x: -0.41,
+                y: -0.45,
+                z: 0.0,
+            },
+            pb: Vector3 {
+                x: 0.41,
+                y: -0.45,
+                z: 0.0,
+            },
+            pc: Vector3 {
+                x: -0.41,
+                y: 0.00,
+                z: 0.0,
+            },
+        },
+        models: Vec::from([model_teapot]),
+    }
+}
 
-        let draw_data = ui.render();
-        renderer
-            .render(&mut target, draw_data)
-            .expect("Rendering failed");
-        target.finish().unwrap();
-    });
+fn render3D(target: &mut Frame, world: &World, shader: &Program) {
+    let eyes = [Eyes::LEFT, Eyes::RIGHT];
+    for eye in eyes.iter() {
+        let eye_offset = match eye {
+            Eyes::LEFT => -0.06,
+            Eyes::RIGHT => 0.06,
+            _ => 0.0,
+        };
+        let pos = [0.0 + eye_offset, 0.0, 60.0];
+        //let (pos, _rot) = tracker.get_pos_rot();
+
+        let view = view_matrix(&pos, &[0.0, 0.0, -1.0], &[0.0, 1.0, 0.0]);
+        let (window_width, window_height) = target.get_dimensions();
+        let perspective = perspective_projection(window_width, window_height);
+
+        //let perspective = general_projection(&display_corners, &pos, 0.01, 1000.0);
+
+        let light = [1.4, 0.4, -0.7f32];
+
+        let params = glium::DrawParameters {
+            color_mask: match STEREO_MODE {
+                StereoModes::ANAGLYPH => match eye {
+                    Eyes::LEFT => (true, false, false, true),
+                    Eyes::RIGHT => (false, true, true, true),
+                    Eyes::CYCLOPS => (true, true, true, true),
+                },
+                _ => (true, true, true, true),
+            },
+            viewport: match STEREO_MODE {
+                StereoModes::ANAGLYPH => None,
+                StereoModes::SBS => match eye {
+                    Eyes::LEFT => Some(Rect {
+                        left: 0,
+                        bottom: 0,
+                        width: window_width / 2,
+                        height: 768,
+                    }),
+                    Eyes::RIGHT => Some(Rect {
+                        left: window_width / 2,
+                        bottom: 0,
+                        width: window_width / 2,
+                        height: 768,
+                    }),
+                    Eyes::CYCLOPS => None,
+                },
+            },
+            depth: glium::Depth {
+                test: glium::draw_parameters::DepthTest::IfLess,
+                write: true,
+                ..Default::default()
+            },
+            //backface_culling: glium::draw_parameters::BackfaceCullingMode::CullClockWise,
+            ..Default::default()
+        };
+
+        for m in world.models.as_slice() {
+            target.draw((&m.positions, &m.normals), &m.indices, &shader,
+                        &uniform! { model: m.model_mat, view: view, perspective: perspective, u_light: light },
+                        &params).unwrap();
+        }
+    } // eye
 }
 
 fn run_ui(run: &mut bool, ui: &mut Ui) {
     ui.text(im_str!("Hello world!"));
-    //ui.text(im_str!("こんにちは世界！"));
     ui.text(im_str!("This...is...imgui-rs!"));
     ui.separator();
     let mouse_pos = ui.io().mouse_pos;
-    println!("{:?}", mouse_pos);
     ui.text(format!(
         "Mouse Position: ({:.1},{:.1})",
         mouse_pos[0], mouse_pos[1]
     ));
 }
 
-
-fn general_projection(display: &DisplayCorners, pe: &Vector3<f32>, near: f32, far: f32) -> Matrix4<f32> {
+fn general_projection(
+    display: &DisplayCorners,
+    pe: &Vector3<f32>,
+    near: f32,
+    far: f32,
+) -> Matrix4<f32> {
     let (pa, pb, pc) = (display.pa, display.pb, display.pc);
 
-    let vr : Vector3<f32> = (pb - pa).normalize();
-    let vu : Vector3<f32> = (pc - pa).normalize();
+    let vr: Vector3<f32> = (pb - pa).normalize();
+    let vu: Vector3<f32> = (pc - pa).normalize();
     let vn = (vr.cross(vu)).normalize();
 
     let va = pa - pe;
@@ -258,10 +302,10 @@ fn general_projection(display: &DisplayCorners, pe: &Vector3<f32>, near: f32, fa
 
     let d = -(vn.dot(va));
 
-    let l = (vr.dot(va)) * near/d;
-    let r = (vr.dot(vb)) * near/d;
-    let b = (vu.dot(va)) * near/d;
-    let t = (vu.dot(vc)) * near/d;
+    let l = (vr.dot(va)) * near / d;
+    let r = (vr.dot(vb)) * near / d;
+    let b = (vu.dot(va)) * near / d;
+    let t = (vu.dot(vc)) * near / d;
     let P = cgmath::frustum(l, r, b, t, near, far);
 
     let Mt = Matrix4::from(Matrix3::from_cols(vr, vu, vn).transpose());
@@ -271,11 +315,12 @@ fn general_projection(display: &DisplayCorners, pe: &Vector3<f32>, near: f32, fa
     P * Mt * T
 }
 
-fn perspective_projection(window_width: u32, window_height: u32) -> [[f32; 4]; 4]{
-    let aspect_ratio = window_height as f32 / match STEREO_MODE {
-        StereoModes::SBS => window_width as f32 / 2.0,
-        _ => window_width as f32,
-    } as f32;
+fn perspective_projection(window_width: u32, window_height: u32) -> [[f32; 4]; 4] {
+    let aspect_ratio = window_height as f32
+        / match STEREO_MODE {
+            StereoModes::SBS => window_width as f32 / 2.0,
+            _ => window_width as f32,
+        } as f32;
 
     let fov: f32 = std::f32::consts::PI / 3.0;
     let zfar = 1024.0;
@@ -299,9 +344,11 @@ fn view_matrix(position: &[f32; 3], direction: &[f32; 3], up: &[f32; 3]) -> [[f3
         [f[0] / len, f[1] / len, f[2] / len]
     };
 
-    let s = [up[1] * f[2] - up[2] * f[1],
+    let s = [
+        up[1] * f[2] - up[2] * f[1],
         up[2] * f[0] - up[0] * f[2],
-        up[0] * f[1] - up[1] * f[0]];
+        up[0] * f[1] - up[1] * f[0],
+    ];
 
     let s_norm = {
         let len = s[0] * s[0] + s[1] * s[1] + s[2] * s[2];
@@ -309,13 +356,17 @@ fn view_matrix(position: &[f32; 3], direction: &[f32; 3], up: &[f32; 3]) -> [[f3
         [s[0] / len, s[1] / len, s[2] / len]
     };
 
-    let u = [f[1] * s_norm[2] - f[2] * s_norm[1],
+    let u = [
+        f[1] * s_norm[2] - f[2] * s_norm[1],
         f[2] * s_norm[0] - f[0] * s_norm[2],
-        f[0] * s_norm[1] - f[1] * s_norm[0]];
+        f[0] * s_norm[1] - f[1] * s_norm[0],
+    ];
 
-    let p = [-position[0] * s_norm[0] - position[1] * s_norm[1] - position[2] * s_norm[2],
+    let p = [
+        -position[0] * s_norm[0] - position[1] * s_norm[1] - position[2] * s_norm[2],
         -position[0] * u[0] - position[1] * u[1] - position[2] * u[2],
-        -position[0] * f[0] - position[1] * f[1] - position[2] * f[2]];
+        -position[0] * f[0] - position[1] * f[1] - position[2] * f[2],
+    ];
 
     [
         [s_norm[0], u[0], f[0], 0.0],
