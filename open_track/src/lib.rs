@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::{mem, thread};
 
 pub struct OpenTrackServer {
-    pos_rot: RwLock<([f32; 3], [f32; 3])>,
+    pos_rot: RwLock<Option<([f32; 3], [f32; 3])>>,
 }
 
 impl OpenTrackServer {
@@ -16,7 +16,7 @@ impl OpenTrackServer {
             .expect("OpenTrack: Failed to set socket time-out");
 
         let server = Arc::new(OpenTrackServer {
-            pos_rot: RwLock::new(([0.0; 3], [0.0; 3])),
+            pos_rot: RwLock::new(Option::None),
         });
 
         let threads_server_ref = server.clone();
@@ -27,7 +27,7 @@ impl OpenTrackServer {
         server.clone()
     }
 
-    pub fn get_pos_rot(&self) -> ([f32; 3], [f32; 3]) {
+    pub fn get_pos_rot(&self) -> Option<([f32; 3], [f32; 3])> {
         *self.pos_rot.read().unwrap()
     }
 
@@ -39,9 +39,13 @@ impl OpenTrackServer {
                 assert_eq!(n, buf.len());
                 let pos_rot = parse_pos_rot(&buf);
                 let mut write = self.pos_rot.write().unwrap();
-                *write = pos_rot;
+                *write = Option::from(pos_rot);
             }
-            Err(e) => eprintln!("Opentrack error receiving package: {}", e),
+            Err(e) => {
+                let mut write = self.pos_rot.write().unwrap();
+                *write = Option::None;
+                eprintln!("Opentrack error receiving package: {}", e)
+            },
         }
     }
 }
