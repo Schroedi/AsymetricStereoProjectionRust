@@ -406,8 +406,10 @@ fn general_projection(
     let vc = pc - pe;
 
     let d = -(vn.dot(va));
-    assert!(d >= 0.0001, "eye-screen distance is zero or less => this would mean that the eye is inside the \
+    if (d < 0.0001) {
+        eprintln!("eye-screen distance is zero or less => this would mean that the eye is inside the \
     monitor. Is the tracking working and the coordinate system in the right direction?");
+    }
 
     let nd = near / d;
     let l = (vr.dot(va)) * nd;
@@ -420,6 +422,7 @@ fn general_projection(
 
     let T = Matrix4::from_translation(-*pe);
 
-    P * Mt * T
-    //P * T
+    let comb = P * Mt * T;
+    let foo = 42;
+    comb
 }
