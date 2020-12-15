@@ -1,15 +1,15 @@
 #![feature(array_map)]
 
 extern crate open_track;
+mod mat_helpers;
+mod world;
 
-use std::fmt;
 use std::time::Instant;
 
-use cgmath::{Matrix3, Matrix4, Vector4, Point3, Perspective, PerspectiveFov, Rad, Deg};
+use cgmath::{Matrix3, Matrix4, Point3, PerspectiveFov, Rad, Deg};
 use cgmath::prelude::*;
 use cgmath::Vector3;
-use glium::{Display, Frame, IndexBuffer, Program, Rect, Surface, uniform, VertexBuffer, DrawParameters};
-use glium::index::PrimitiveType;
+use glium::{Display, Frame, Rect, Surface, uniform, DrawParameters};
 use glutin::window::WindowBuilder;
 use imgui_glium_renderer::imgui::{Context, FontConfig, FontSource, im_str, Ui};
 use imgui_glium_renderer::Renderer;
@@ -19,9 +19,9 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit_input_helper::WinitInputHelper;
 
 use open_track::OpenTrackServer;
+use crate::mat_helpers::{print_mat_ui, vec_from_array3};
+use crate::world::{World, DisplayCorners};
 
-#[path = "teapot.rs"]
-mod teapot;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -35,6 +35,7 @@ enum Eyes {
 enum StereoModes {
     ANAGLYPH,
     SBS,
+    PANCAKE,
 }
 
 #[allow(dead_code)]
@@ -44,52 +45,11 @@ enum TrackerModes {
     CONSTANT,
 }
 
-struct DisplayCorners {
-    pa: Vector3<f32>,
-    pb: Vector3<f32>,
-    pc: Vector3<f32>,
-}
 
-struct Model {
-    positions: VertexBuffer<teapot::Vertex>,
-    normals: VertexBuffer<teapot::Normal>,
-    indices: IndexBuffer<u16>,
-    model_mat: [[f32; 4]; 4],
-}
-
-struct World {
-    display_corners: DisplayCorners,
-    models: Vec<Model>,
-    shader: Program,
-}
-
-const EYE_SEPARATION: f32 =0.06;
-const STEREO_MODE: StereoModes = StereoModes::SBS;
+/// Config
+const EYE_SEPARATION: f32 = 0.06;
+const STEREO_MODE: StereoModes = StereoModes::PANCAKE;
 const TRACKER_MODE: TrackerModes = TrackerModes::OPENTRACK;
-
-fn vec_from_array3(v : &[f32; 3]) -> Vector3<f32> {
-    return Vector3::new(v[0], v[1], v[2]);
-}
-
-fn vec_from_array4(v : &[f32; 4]) -> Vector4<f32> {
-    return Vector4::new(v[0], v[1], v[2], v[3]);
-}
-
-fn print_mat(m : &Matrix4<f32>) -> String {
-    let mut res : String = "".to_string();
-    res += &*format!("\n{:?}", m.row(0));
-    res += &*format!("\n{:?}", m.row(1));
-    res += &*format!("\n{:?}", m.row(2));
-    res += &*format!("\n{:?}", m.row(3));
-    return res;
-}
-
-fn print_mat_ui(m : &Matrix4<f32>, ui: &mut Ui) {
-    ui.text(im_str!("{:+.3?}", m.row(0)));
-    ui.text(im_str!("{:+.3?}", m.row(1)));
-    ui.text(im_str!("{:+.3?}", m.row(2)));
-    ui.text(im_str!("{:+.3?}", m.row(3)));
-}
 
 fn main() {
     let title = "Stereo testing";
@@ -124,7 +84,7 @@ fn main() {
     let mut renderer = Renderer::init(&mut imgui, &display).expect("Failed to initialize renderer");
 
     // our stuff
-    let world = build_world(&display);
+    let world = world::build_world(&display);
     let tracker = open_track::OpenTrackServer::start(None);
 
     let mut input = WinitInputHelper::new();
@@ -176,81 +136,6 @@ fn main() {
     }})
 }
 
-fn build_shader(display: &Display) -> Program {
-    let vertex_shader_src = r#"
-        #version 150
-        in vec3 position;
-        in vec3 normal;
-        out vec3 v_normal;
-        out vec3 v_position;
-        uniform mat4 perspective;
-        uniform mat4 view;
-        uniform mat4 model;
-        void main() {
-            mat4 modelview = view * model;
-            v_normal = transpose(inverse(mat3(modelview))) * normal;
-            gl_Position = perspective * modelview * vec4(position, 1.0);
-            v_position = gl_Position.xyz / gl_Position.w;
-        }
-    "#;
-
-    let fragment_shader_src = r#"
-        #version 150
-        in vec3 v_normal;
-        in vec3 v_position;
-        out vec4 color;
-        uniform vec3 u_light;
-        const vec3 ambient_color = vec3(0.2, 0.0, 0.0);
-        const vec3 diffuse_color = vec3(0.6, 0.0, 0.0);
-        const vec3 specular_color = vec3(1.0, 1.0, 1.0);
-        void main() {
-            float diffuse = max(dot(normalize(v_normal), normalize(u_light)), 0.0);
-            vec3 camera_dir = normalize(-v_position);
-            vec3 half_direction = normalize(normalize(u_light) + camera_dir);
-            float specular = pow(max(dot(half_direction, normalize(v_normal)), 0.0), 16.0);
-            color = vec4(ambient_color + diffuse * diffuse_color + specular * specular_color, 1.0);
-            //color = vec4(1.0, 1.0, 0.0, 1.0);
-        }
-    "#;
-    Program::from_source(display, vertex_shader_src, fragment_shader_src, None).unwrap()
-}
-
-fn build_world(display: &Display) -> World {
-    let model_teapot = Model {
-        model_mat: [
-            [0.01, 0.0, 0.0, 0.0],
-            [0.0, 0.01, 0.0, 0.0],
-            [0.0, 0.0, 0.01, 0.0],
-            [0.0, 0.0, -10.0, 1.0f32],
-        ],
-        positions: VertexBuffer::new(display, &teapot::VERTICES).unwrap(),
-        normals: VertexBuffer::new(display, &teapot::NORMALS).unwrap(),
-        indices: IndexBuffer::new(display, PrimitiveType::TrianglesList, &teapot::INDICES).unwrap(),
-    };
-
-    World {
-        display_corners: DisplayCorners {
-            pa: Vector3 {
-                x: -0.41,
-                y: -0.45,
-                z: 0.0,
-            },
-            pb: Vector3 {
-                x: 0.41,
-                y: -0.45,
-                z: 0.0,
-            },
-            pc: Vector3 {
-                x: -0.41,
-                y: 0.00,
-                z: 0.0,
-            },
-        },
-        models: Vec::from([model_teapot]),
-        shader: build_shader(&display),
-    }
-}
-
 fn render3d(target: &mut Frame, world: &World, tracker: &OpenTrackServer, ui: &mut Ui) {
     // debugging info about the world
     {
@@ -259,42 +144,50 @@ fn render3d(target: &mut Frame, world: &World, tracker: &OpenTrackServer, ui: &m
         ui.text(im_str!("Screen size {:?}", [width, height]));
     }
 
-    let eyes = [Eyes::LEFT, Eyes::RIGHT];
-    for eye in eyes.iter() {
-        ui.separator();
-        ui.text(im_str!("{:?} eye", eye));
+    match STEREO_MODE {
+        StereoModes::PANCAKE =>
+            reder_for_eye(target, &world, tracker, ui, &Eyes::CYCLOPS),
+        _ => {
+            reder_for_eye(target, &world, tracker, ui, &Eyes::LEFT);
+            reder_for_eye(target, &world, tracker, ui, &Eyes::RIGHT);
+        }
+    };
+}
 
-        // Eye position
-        let pos = eye_pos(tracker, eye);
-        ui.text(im_str!("pos {:+.3?}", pos));
+fn reder_for_eye(target: &mut Frame, world: &&World, tracker: &OpenTrackServer, ui: &mut Ui, eye: &Eyes) {
+    ui.separator();
+    ui.text(im_str!("{:?} eye", eye));
 
-        let viewport_rect = viewport(target, eye);
-        // let perspective = simple_projection(viewport_rect.unwrap().width,
-        //                                     viewport_rect.unwrap().height, &pos,
-        //                                     0.01, 1000.0);
+    // Eye position
+    let pos = eye_pos(tracker, eye);
+    ui.text(im_str!("pos {:+.3?}", pos));
 
-        let perspective = general_projection(&world.display_corners, &pos, 0.01, 1000.0);
-        ui.text(im_str!("projection:"));
-        print_mat_ui(&perspective, ui);
+    let viewport_rect = viewport(target, eye);
+    // let perspective = simple_projection(viewport_rect.unwrap().width,
+    //                                     viewport_rect.unwrap().height, &pos,
+    //                                     0.01, 1000.0);
 
-        let params = draw_parameters(eye, viewport_rect);
+    let perspective = general_projection(&world.display_corners, &pos, 0.1, 1000.0, ui);
+    ui.text(im_str!("projection:"));
+    print_mat_ui(&perspective, ui);
 
-        // uniforms
-        let light = [1.4, 0.4, 0.7f32];
-        let view_mat : [[f32; 4]; 4] = *Matrix4::identity().as_ref();
-        let cam_projection: [[f32; 4]; 4] = *perspective.as_ref();
+    let params = draw_parameters(eye, viewport_rect);
 
-        for m in world.models.as_slice() {
-            let uniforms = &uniform! {
+    // uniforms
+    let light = [1.4, 0.4, 0.7f32];
+    let view_mat: [[f32; 4]; 4] = *Matrix4::identity().as_ref();
+    let cam_projection: [[f32; 4]; 4] = *perspective.as_ref();
+
+    for m in world.models.as_slice() {
+        let uniforms = &uniform! {
                 model: m.model_mat,
                 view: view_mat,
                 perspective: cam_projection,
                 u_light: light };
-            target.draw((&m.positions, &m.normals), &m.indices,
-                        &world.shader, uniforms,
-                        &params).unwrap();
-        }
-    } // eye
+        target.draw((&m.positions, &m.normals), &m.indices,
+                    &world.shader, uniforms,
+                    &params).unwrap();
+    }
 }
 
 fn draw_parameters(eye: &Eyes, viewport_rect: Option<Rect>) -> DrawParameters {
@@ -313,7 +206,7 @@ fn draw_parameters(eye: &Eyes, viewport_rect: Option<Rect>) -> DrawParameters {
             write: true,
             ..Default::default()
         },
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
+        //backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
         ..Default::default()
     };
     params
@@ -321,27 +214,34 @@ fn draw_parameters(eye: &Eyes, viewport_rect: Option<Rect>) -> DrawParameters {
 
 fn viewport(target: &mut Frame, eye: &Eyes) -> Option<Rect> {
     let (window_width, window_height) = target.get_dimensions();
-    let viewport_rect = match eye {
-        Eyes::LEFT => Some(Rect {
-            left: 0,
-            bottom: 0,
-            width: window_width / 2,
-            height: window_height,
-        }),
-        Eyes::RIGHT => Some(Rect {
-            left: window_width / 2,
-            bottom: 0,
-            width: window_width / 2,
-            height: window_height,
-        }),
-        Eyes::CYCLOPS => Some(Rect {
+    match STEREO_MODE {
+        StereoModes::SBS => match eye {
+            Eyes::LEFT => Some(Rect {
+                left: 0,
+                bottom: 0,
+                width: window_width / 2,
+                height: window_height,
+            }),
+            Eyes::RIGHT => Some(Rect {
+                left: window_width / 2,
+                bottom: 0,
+                width: window_width / 2,
+                height: window_height,
+            }),
+            Eyes::CYCLOPS => Some(Rect {
+                left: 0,
+                bottom: 0,
+                width: window_width,
+                height: window_height,
+            }),
+        },
+        _ => Some(Rect {
             left: 0,
             bottom: 0,
             width: window_width,
             height: window_height,
         }),
-    };
-    viewport_rect
+    }
 }
 
 fn eye_pos(tracker: &OpenTrackServer, eye: &Eyes) -> Vector3<f32> {
@@ -394,6 +294,7 @@ fn general_projection(
     pe: &Vector3<f32>,
     near: f32,
     far: f32,
+    ui: &mut Ui
 ) -> Matrix4<f32> {
     let (pa, pb, pc) = (display.pa, display.pb, display.pc);
 
@@ -405,24 +306,32 @@ fn general_projection(
     let vb = pb - pe;
     let vc = pc - pe;
 
-    let d = -(vn.dot(va));
+    let mut d = -(va.dot(vn));
     if (d < 0.0001) {
         eprintln!("eye-screen distance is zero or less => this would mean that the eye is inside the \
     monitor. Is the tracking working and the coordinate system in the right direction?");
+        d = 0.0001;
     }
 
     let nd = near / d;
     let l = (vr.dot(va)) * nd;
-    let b = (vu.dot(va)) * nd;
     let r = (vr.dot(vb)) * nd;
+    let b = (vu.dot(va)) * nd;
     let t = (vu.dot(vc)) * nd;
     let P = cgmath::frustum(l, r, b, t, near, far);
 
+    // this is identity for a display aligned with the tracking space
     let Mt = Matrix4::from(Matrix3::from_cols(vr, vu, vn).transpose());
 
     let T = Matrix4::from_translation(-*pe);
 
+    ui.text(im_str!("general projection"));
+    ui.text(im_str!("l {:.2?}, r {:.2?}, b {:.2?}, t {:.2?}:", l, r, b, t));
+    ui.text(im_str!("P:"));
+    print_mat_ui(&P, ui);
+    ui.text(im_str!("T:"));
+    print_mat_ui(&T, ui);
+
     let comb = P * Mt * T;
-    let foo = 42;
     comb
 }
