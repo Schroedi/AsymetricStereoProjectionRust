@@ -9,7 +9,7 @@ pub struct OpenTrackServer {
 
 impl OpenTrackServer {
     pub fn start(port: Option<u16>) -> Arc<OpenTrackServer> {
-        let addr = SocketAddr::from(([192, 168, 178, 24], port.unwrap_or(4242)));
+        let addr = SocketAddr::from(([192, 168, 178, 89], port.unwrap_or(4242)));
         let socket = UdpSocket::bind(addr).expect("OpenTrack: Failed to bind socket");
         socket
             .set_read_timeout(Option::from(Duration::from_millis(10)))

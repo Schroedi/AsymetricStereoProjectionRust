@@ -32,7 +32,7 @@ pub(crate) fn build_world(display: &Display) -> World {
             [0.0051, 0.0, 0.0, 0.0],
             [0.0, 0.0051, 0.0, 0.0],
             [0.0, 0.0, 0.0051, 0.0],
-            [0.0, -0.450, -0.1, 1.0f32],
+            [0.0, -0.250, -0.2, 1.0f32],
         ],
         positions: VertexBuffer::new(display, &teapot::VERTICES).unwrap(),
         normals: VertexBuffer::new(display, &teapot::NORMALS).unwrap(),
