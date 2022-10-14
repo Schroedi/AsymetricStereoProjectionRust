@@ -1,5 +1,3 @@
-//#![feature(array_map)]
-
 extern crate open_track;
 mod mat_helpers;
 mod world;
@@ -11,7 +9,7 @@ use cgmath::prelude::*;
 use cgmath::Vector3;
 use glium::{Display, Frame, Rect, Surface, uniform, DrawParameters};
 use glutin::window::WindowBuilder;
-use imgui_glium_renderer::imgui::{Context, FontConfig, FontSource, im_str, Ui};
+use imgui_glium_renderer::imgui::{Context, FontConfig, FontSource, Ui};
 use imgui_glium_renderer::Renderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use winit::event::{Event, WindowEvent, VirtualKeyCode};
@@ -141,7 +139,7 @@ fn render3d(target: &mut Frame, world: &World, tracker: &OpenTrackServer, ui: &m
     {
         let width = (world.display_corners.pb - world.display_corners.pa).magnitude();
         let height = (world.display_corners.pc - world.display_corners.pa).magnitude();
-        ui.text(im_str!("Screen size {:?}", [width, height]));
+        ui.text(format!("Screen size {:?}", [width, height]));
     }
 
     match STEREO_MODE {
@@ -156,11 +154,11 @@ fn render3d(target: &mut Frame, world: &World, tracker: &OpenTrackServer, ui: &m
 
 fn reder_for_eye(target: &mut Frame, world: &&World, tracker: &OpenTrackServer, ui: &mut Ui, eye: &Eyes) {
     ui.separator();
-    ui.text(im_str!("{:?} eye", eye));
+    ui.text(format!("{:?} eye", eye));
 
     // Eye position
     let pos = eye_pos(tracker, eye);
-    ui.text(im_str!("pos {:+.3?}", pos));
+    ui.text(format!("pos {:+.3?}", pos));
 
     let viewport_rect = viewport(target, eye);
     // let perspective = simple_projection(viewport_rect.unwrap().width,
@@ -168,7 +166,7 @@ fn reder_for_eye(target: &mut Frame, world: &&World, tracker: &OpenTrackServer, 
     //                                     0.01, 1000.0);
 
     let perspective = general_projection(&world.display_corners, &pos, 0.1, 1000.0, ui);
-    ui.text(im_str!("projection:"));
+    ui.text(format!("projection:"));
     print_mat_ui(&perspective, ui);
 
     let params = draw_parameters(eye, viewport_rect);
@@ -274,7 +272,7 @@ fn eye_pos(tracker: &OpenTrackServer, eye: &Eyes) -> Vector3<f32> {
 fn simple_projection(window_width: u32, window_height: u32, pe: &Vector3<f32>, near: f32, far: f32,)
     -> Matrix4<f32> {
     let T = Matrix4::from_translation(-*pe);
-    let V = Matrix4::look_at(Point3::from_vec(*pe), Point3::origin(), Vector3::unit_y());
+    let V = Matrix4::look_at_rh(Point3::from_vec(*pe), Point3::origin(), Vector3::unit_y());
     let width = match STEREO_MODE {
         StereoModes::SBS => window_width as f32 / 2.0,
         _ => window_width as f32,
@@ -307,7 +305,7 @@ fn general_projection(
     let vc = pc - pe;
 
     let mut d = -(va.dot(vn));
-    if (d < 0.0001) {
+    if d < 0.0001 {
         eprintln!("eye-screen distance is zero or less => this would mean that the eye is inside the \
     monitor. Is the tracking working and the coordinate system in the right direction?");
         d = 0.0001;
@@ -325,11 +323,11 @@ fn general_projection(
 
     let T = Matrix4::from_translation(-*pe);
 
-    ui.text(im_str!("general projection"));
-    ui.text(im_str!("l {:.2?}, r {:.2?}, b {:.2?}, t {:.2?}:", l, r, b, t));
-    ui.text(im_str!("P:"));
+    ui.text(format!("general projection"));
+    ui.text(format!("l {:.2?}, r {:.2?}, b {:.2?}, t {:.2?}:", l, r, b, t));
+    ui.text(format!("P:"));
     print_mat_ui(&P, ui);
-    ui.text(im_str!("T:"));
+    ui.text(format!("T:"));
     print_mat_ui(&T, ui);
 
     let comb = P * Mt * T;
